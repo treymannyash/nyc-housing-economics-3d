@@ -28,8 +28,9 @@ All model parameters live in [`src/sim/stab.ts`](src/sim/stab.ts). They are illu
 
 - **Vite, React 19, TypeScript and three.js.** There's no UI framework; the small kit in `src/kit.tsx` provides layout, tables and charts.
 - **One WebGL context for the whole page** (`src/engine/renderer.ts`):
-  - A fixed, click-through canvas covers the viewport.
-  - Every 3D view is a normal DOM box that registers with it. Each frame, only the views on screen are drawn, into their own scissor rectangles.
+  - The WebGL canvas is never placed in the page. Each visible view is rendered into it and immediately copied into that view's own 2D canvas, inside a clipped box (`overflow: hidden; contain: paint`).
+  - The 3D picture is therefore ordinary page content. It scrolls with its box and can't bleed over text, even when JavaScript lags behind iOS momentum scrolling or Safari's toolbar resizes the viewport.
+  - A single context stays well under iOS's limit on live WebGL contexts.
   - The loop stops when no view is visible.
 - **Lighting and geometry**: a hemisphere light plus one shadow-casting directional light, ACES tone mapping and fog. Geometry is instanced: one draw call per primitive type per view (boxes, glass, ice, roofs, lit and dark windows, people, rods).
 - **Labels** are DOM overlays, projected every frame, with a greedy pass that moves or drops any label that would overlap another.
@@ -60,7 +61,7 @@ npm run build     # type-check + production build into dist/
 npm run preview   # serve the production build
 ```
 
-Requires Node 20+ (built with Node 24). `vite.config.ts` uses a relative base, so `dist/` works from any static host or sub-path. `.github/workflows/deploy.yml` builds every push to `main`. To publish, enable Pages (Settings → Pages → Source: GitHub Actions; private repos need a paid plan) and run the workflow by hand.
+Requires Node 20+ (built with Node 24). `vite.config.ts` uses a relative base, so `dist/` works from any static host or sub-path. `.github/workflows/deploy.yml` builds every pull request and builds and deploys every push to `main` to GitHub Pages: https://treymannyash.github.io/nyc-housing-economics-3d/
 
 ## Sources (selection)
 

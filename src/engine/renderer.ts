@@ -1,8 +1,12 @@
 /*
- * One WebGL context for the whole page. A fixed, click-through canvas covers the viewport;
- * every 3D "view" is a DOM box that registers here. Each frame we read all view rects once,
- * then render only the views on screen into their scissor rectangles. Geometry is instanced
- * and shared, and labels are DOM overlays placed with a simple overlap-avoiding pass.
+ * One WebGL context for the whole page, but no page-sized canvas. The WebGL canvas stays
+ * off-DOM; each visible view is rendered into its corner and immediately copied (drawImage)
+ * into that view's own 2D canvas, which lives inside the clipped view box. The picture is
+ * therefore part of normal page layout: it scrolls with the box on the compositor and can
+ * never be painted outside it, even when JavaScript lags behind iOS momentum scrolling or the
+ * Safari toolbar resizes the viewport. A single context also stays far below iOS's limit on
+ * live WebGL contexts. Views render only while on screen (IntersectionObserver), geometry is
+ * instanced, and labels are DOM overlays inside the same clipped box.
  */
 import * as THREE from "three";
 import type { SceneData, Prim, Lb } from "./prims";
@@ -66,7 +70,8 @@ type View = {
   pools: Record<string, THREE.InstancedMesh>;
   yaw: number; pitch: number; yaw0: number; pitch0: number; zoom: number; orb: number; lastAct: number;
   target: THREE.Vector3; dist: number; camInit: boolean;
-  visible: boolean; rect: DOMRect | null;
+  visible: boolean; w: number; h: number; dpr: number;
+  out: HTMLCanvasElement; ctx: CanvasRenderingContext2D | null; ro: ResizeObserver;
   labelEls: HTMLDivElement[]; labelW: Map<string, number>;
   io: IntersectionObserver; cleanup: () => void;
 };
@@ -79,12 +84,9 @@ let raf = 0, last = 0, T = 0;
 function ensureRenderer() {
   if (renderer) return renderer;
   canvas = document.createElement("canvas");
-  canvas.className = "gl-layer";
-  canvas.setAttribute("aria-hidden", "true");
-  document.body.appendChild(canvas);
-  renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: "high-performance" });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, DPR_CAP));
-  renderer.setSize(window.innerWidth, window.innerHeight, false);
+  renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, premultipliedAlpha: true, powerPreference: "high-performance" });
+  renderer.setPixelRatio(1); // we size in device pixels ourselves
+  renderer.setSize(16, 16, false);
   renderer.setClearColor(0x000000, 0);
   renderer.autoClear = false;
   renderer.shadowMap.enabled = true;
@@ -92,10 +94,15 @@ function ensureRenderer() {
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.05;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
-  const onResize = () => { renderer!.setPixelRatio(Math.min(window.devicePixelRatio || 1, DPR_CAP)); renderer!.setSize(window.innerWidth, window.innerHeight, false); kick(); };
-  window.addEventListener("resize", onResize);
-  window.addEventListener("scroll", kick, { passive: true });
+  document.addEventListener("visibilitychange", kick);
   return renderer;
+}
+const dprNow = () => Math.min(window.devicePixelRatio || 1, DPR_CAP);
+let bufW = 16, bufH = 16;
+/** Grow-only drawing buffer, big enough for the largest visible view (capped). */
+function fitBuffer(w: number, h: number) {
+  const W = Math.min(4096, Math.max(bufW, w)), H = Math.min(4096, Math.max(bufH, h));
+  if (W !== bufW || H !== bufH) { bufW = W; bufH = H; renderer!.setSize(W, H, false); }
 }
 
 function kick() { if (!raf) { last = performance.now(); raf = requestAnimationFrame(loop); } }
@@ -218,14 +225,13 @@ function loop(now: number) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
   const reduced = isReduced();
   if (!reduced) T += dt;
-  const W = window.innerWidth, H = window.innerHeight;
-  const vis: View[] = [];
-  for (const v of views) if (v.visible) { v.rect = v.el.getBoundingClientRect(); vis.push(v); }
-  r.setScissorTest(false); r.clear();
-  r.setScissorTest(true);
-  for (const v of vis) {
-    const rc = v.rect!;
-    if (rc.bottom < 0 || rc.top > H || rc.width < 2 || rc.height < 2) continue;
+  let any = false;
+  for (const v of views) {
+    if (!v.visible || !v.ctx || v.w < 2 || v.h < 2) continue;
+    any = true;
+    const pw = Math.max(1, Math.round(v.w * v.dpr)), ph = Math.max(1, Math.round(v.h * v.dpr));
+    if (v.out.width !== pw || v.out.height !== ph) { v.out.width = pw; v.out.height = ph; }
+    fitBuffer(pw, ph);
     const S = v.frame(T, reduced ? 0 : dt);
     writeScene(v, S);
     // camera: ease to the scene's goal, idle orbit when untouched
@@ -239,18 +245,21 @@ function loop(now: number) {
     const D = v.dist / v.zoom, cp = Math.cos(v.pitch), sp = Math.sin(v.pitch);
     v.cam.position.set(v.target.x - Math.sin(yw) * cp * D, v.target.y + sp * D, v.target.z + Math.cos(yw) * cp * D);
     v.cam.lookAt(v.target);
-    v.cam.aspect = rc.width / rc.height; v.cam.updateProjectionMatrix();
+    v.cam.aspect = v.w / v.h; v.cam.updateProjectionMatrix();
     v.light.position.set(v.target.x - 6, v.target.y + 11, v.target.z + 5.5);
     v.light.target.position.copy(v.target);
-    const x = rc.left, y = H - rc.bottom;
-    r.setViewport(x, y, rc.width, rc.height);
-    r.setScissor(x, y, rc.width, rc.height);
+    // draw into the top-left corner of the shared buffer, then copy into the view's own canvas
+    const y = bufH - ph;
+    r.setScissorTest(true);
+    r.setViewport(0, y, pw, ph);
+    r.setScissor(0, y, pw, ph);
     r.clear();
     r.render(v.scene, v.cam);
-    placeLabels(v, S.l, rc.width, rc.height);
+    v.ctx.clearRect(0, 0, pw, ph);
+    v.ctx.drawImage(canvas, 0, 0, pw, ph, 0, 0, pw, ph);
+    placeLabels(v, S.l, v.w, v.h);
   }
-  void W;
-  if (vis.length && !document.hidden) raf = requestAnimationFrame(loop);
+  if (any && !document.hidden) raf = requestAnimationFrame(loop);
 }
 
 export function registerView(o: ViewOpts): ViewHandle {
@@ -259,11 +268,20 @@ export function registerView(o: ViewOpts): ViewHandle {
     el: o.el, labels: o.labels, frame: o.frame,
     scene: new THREE.Scene(), cam: new THREE.PerspectiveCamera(36, 1.6, 0.1, 80), light: new THREE.DirectionalLight(),
     pools: {}, yaw: o.yaw0 ?? -0.6, pitch: o.pitch0 ?? 0.5, yaw0: o.yaw0 ?? -0.6, pitch0: o.pitch0 ?? 0.5, zoom: 1, orb: 0, lastAct: -1e9,
-    target: new THREE.Vector3(0, 0.8, 0), dist: 12, camInit: false, visible: false, rect: null,
+    target: new THREE.Vector3(0, 0.8, 0), dist: 12, camInit: false, visible: false, w: 0, h: 0, dpr: dprNow(),
+    out: document.createElement("canvas"), ctx: null, ro: null as unknown as ResizeObserver,
     labelEls: [], labelW: new Map(), io: null as unknown as IntersectionObserver, cleanup: () => {},
   };
   makeScene(v);
-  v.io = new IntersectionObserver((es) => { for (const e of es) v.visible = e.isIntersecting; if (v.visible) kick(); }, { rootMargin: "60px" });
+  v.out.className = "view3d-canvas";
+  v.out.setAttribute("aria-hidden", "true");
+  o.el.insertBefore(v.out, o.el.firstChild);
+  v.ctx = v.out.getContext("2d", { alpha: true });
+  const measure = () => { const b = o.el.getBoundingClientRect(); v.w = b.width; v.h = b.height; v.dpr = dprNow(); kick(); };
+  measure();
+  v.ro = new ResizeObserver(measure);
+  v.ro.observe(o.el);
+  v.io = new IntersectionObserver((es) => { for (const e of es) v.visible = e.isIntersecting; if (v.visible) kick(); });
   v.io.observe(o.el);
   // drag to rotate; vertical page scroll stays native on touch (touch-action: pan-y)
   let dragging = false, px = 0, py = 0;
@@ -281,7 +299,8 @@ export function registerView(o: ViewOpts): ViewHandle {
     reset: () => { v.zoom = 1; v.yaw = v.yaw0; v.pitch = v.pitch0; v.orb = 0; kick(); },
     touch: () => kick(),
     dispose: () => {
-      v.io.disconnect(); v.cleanup(); views.delete(v);
+      v.io.disconnect(); v.ro.disconnect(); v.cleanup(); views.delete(v);
+      v.out.width = v.out.height = 0; v.out.remove();
       for (const k in v.pools) v.pools[k].dispose();
       v.light.shadow.map?.dispose();
       for (const el of v.labelEls) el.remove();

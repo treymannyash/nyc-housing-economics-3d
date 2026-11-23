@@ -112,7 +112,7 @@ input[type=range]::-moz-range-thumb { width: 18px; height: 18px; border-radius: 
 .st-d { color: var(--sub); font-size: var(--f-sm); }
 .floating { position: fixed; z-index: 20; pointer-events: none; }
 .floating > * { pointer-events: auto; }
-.f-top { top: 10px; left: 0; right: 0; display: flex; justify-content: center; padding: 0 10px; }
+.f-top { top: 0; left: 0; right: 0; display: flex; justify-content: center; padding: max(8px, env(safe-area-inset-top)) 10px 10px; background: linear-gradient(to bottom, #070a12 0%, #070a12 72%, rgba(7,10,18,0) 100%); }
 .f-bottom.f-end { bottom: 16px; right: 16px; }
 .to-top { background: rgba(11,16,32,0.9); backdrop-filter: blur(10px); }
 
@@ -159,16 +159,16 @@ input[type=range]::-moz-range-thumb { width: 18px; height: 18px; border-radius: 
 @keyframes fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 
 /* ---------- rail ---------- */
-.rail { background: rgba(7,10,18,0.82); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border: 1px solid var(--line); border-radius: 16px; padding: 6px 8px 7px; max-width: 100%; }
+.rail { background: rgba(7,10,18,0.97); backdrop-filter: blur(14px) saturate(140%); -webkit-backdrop-filter: blur(14px) saturate(140%); box-shadow: 0 8px 24px -10px rgba(0,0,0,0.8); border: 1px solid var(--line); border-radius: 16px; padding: 6px 8px 7px; max-width: 100%; }
 .rail-b { display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; }
 .rail-b::-webkit-scrollbar { display: none; }
 .rail-p { height: 2px; background: var(--line); border-radius: 1px; margin-top: 6px; overflow: hidden; }
 .rail-p div { height: 100%; background: var(--accent); transform-origin: left; transition: transform .4s ease; }
 
 /* ---------- 3D views ---------- */
-.gl-layer { position: fixed; inset: 0; width: 100vw; height: 100vh; pointer-events: none; z-index: 5; }
-.view3d { position: relative; width: 100%; border-radius: var(--r); overflow: hidden; touch-action: pan-y; cursor: grab; user-select: none; -webkit-user-select: none; background: radial-gradient(120% 90% at 50% 0%, #1a2340 0%, #0d1324 55%, #070a12 100%); border: 1px solid var(--line); }
+.view3d { position: relative; isolation: isolate; contain: layout paint; width: 100%; border-radius: var(--r); overflow: hidden; clip-path: inset(0 round var(--r)); touch-action: pan-y; cursor: grab; user-select: none; -webkit-user-select: none; background: radial-gradient(120% 90% at 50% 0%, #1a2340 0%, #0d1324 55%, #070a12 100%); border: 1px solid var(--line); }
 .view3d:active { cursor: grabbing; }
+.view3d-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; z-index: 0; pointer-events: none; }
 .view3d-labels { position: absolute; inset: 0; z-index: 6; pointer-events: none; }
 .view3d-wait { position: absolute; inset: 0; background: linear-gradient(100deg, transparent 30%, rgba(255,255,255,0.04) 50%, transparent 70%); background-size: 200% 100%; animation: shimmer 1.4s linear infinite; }
 @keyframes shimmer { from { background-position: 150% 0; } to { background-position: -50% 0; } }
