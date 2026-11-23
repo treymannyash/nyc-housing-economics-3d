@@ -60,7 +60,7 @@ npm run build     # type-check + production build into dist/
 npm run preview   # serve the production build
 ```
 
-Requires Node 20+ (built with Node 24). `vite.config.ts` uses a relative base, so `dist/` works from any static host or sub-path. `.github/workflows/deploy.yml` builds and publishes to GitHub Pages when Pages is enabled for the repo.
+Requires Node 20+ (built with Node 24). `vite.config.ts` uses a relative base, so `dist/` works from any static host or sub-path. `.github/workflows/deploy.yml` builds every push to `main`. To publish, enable Pages (Settings → Pages → Source: GitHub Actions; private repos need a paid plan) and run the workflow by hand.
 
 ## Sources (selection)
 
